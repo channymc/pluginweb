@@ -1,0 +1,1 @@
+{"id":"channyanhweb","name":"ChannyAnhWEB","version":"1.0.0","authors":["ChannyAnh"],"dependencies":[{"id":"skinsrestorer","optional":true},{"id":"litebans","optional":true}],"main":"com.channyanh.channyanhweb.velocity.ChannyAnhWEBVelocity"}

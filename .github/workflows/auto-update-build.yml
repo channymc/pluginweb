@@ -1,0 +1,342 @@
+# ============================================================
+#  auto-update-build.yml
+#  Chạy hàng ngày lúc 04:00 giờ Việt Nam (UTC+7 → 21:00 UTC)
+#  Luồng: Cập nhật thư viện → Build shadowJar → Tạo Release
+# ============================================================
+
+name: 🔄 Auto Update & Build
+
+on:
+  schedule:
+    # 21:00 UTC = 04:00 sáng giờ Việt Nam (UTC+7)
+    - cron: "0 21 * * *"
+
+  # Cho phép chạy thủ công từ tab Actions
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: "Tạo release dù không có thay đổi deps?"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+env:
+  JAVA_VERSION: "17"
+  JAVA_DISTRIBUTION: "temurin"
+
+jobs:
+  # ─────────────────────────────────────────
+  # 1. Kiểm tra & cập nhật dependency
+  # ─────────────────────────────────────────
+  update-dependencies:
+    name: 📦 Update Dependencies
+    runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.check_changes.outputs.has_changes }}
+      new_version: ${{ steps.bump_version.outputs.new_version }}
+
+    steps:
+      - name: ⬇️ Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: ☕ Setup Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+
+      - name: 🗃️ Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: 🔍 Kiểm tra phiên bản Gradle Versions Plugin
+        run: |
+          # Đảm bảo build.gradle có com.github.ben-manes.versions plugin
+          if ! grep -q "ben-manes.versions" build.gradle 2>/dev/null; then
+            echo "⚠️  Chưa có Gradle Versions Plugin – thêm vào build.gradle..."
+            sed -i "s/plugins {/plugins {\n    id 'com.github.ben-manes.versions' version '0.51.0'/" build.gradle
+            echo "PLUGIN_ADDED=true" >> $GITHUB_ENV
+          else
+            echo "✅ Gradle Versions Plugin đã tồn tại"
+            echo "PLUGIN_ADDED=false" >> $GITHUB_ENV
+          fi
+
+      - name: 📋 Báo cáo dependency lỗi thời
+        run: |
+          ./gradlew dependencyUpdates \
+            -Drevision=release \
+            --no-daemon \
+            --info \
+            2>&1 | tee dependency-report.txt || true
+
+      - name: 🔄 Tự động cập nhật versions trong gradle.properties
+        id: auto_update
+        run: |
+          # Parse báo cáo để lấy danh sách upgrade
+          python3 << 'EOF'
+          import re, os
+
+          report_file = "dependency-report.txt"
+          props_file  = "gradle.properties"
+
+          if not os.path.exists(report_file):
+              print("Không tìm thấy báo cáo dependency.")
+              exit(0)
+
+          with open(report_file) as f:
+              content = f.read()
+
+          # Pattern: "group:artifact [currentVersion -> latestVersion]"
+          pattern = re.compile(
+              r"([a-zA-Z0-9._-]+):([a-zA-Z0-9._-]+)\s+\[([^\]]+)\s+->\s+([^\]]+)\]"
+          )
+
+          updates = pattern.findall(content)
+          if not updates:
+              print("Không có dependency nào cần cập nhật.")
+              exit(0)
+
+          print(f"Tìm thấy {len(updates)} dependency cần cập nhật:")
+          for g, a, cur, new in updates:
+              print(f"  {g}:{a}  {cur} → {new}")
+
+          if not os.path.exists(props_file):
+              print("Không tìm thấy gradle.properties – bỏ qua.")
+              exit(0)
+
+          with open(props_file) as f:
+              props = f.read()
+
+          original = props
+          for group, artifact, current, latest in updates:
+              # Tìm key dạng: someKey = currentVersion
+              escaped = re.escape(current)
+              props = re.sub(
+                  rf'(=\s*){escaped}(\s*$)',
+                  rf'\g<1>{latest}\2',
+                  props,
+                  flags=re.MULTILINE
+              )
+
+          if props != original:
+              with open(props_file, "w") as f:
+                  f.write(props)
+              print("✅ gradle.properties đã được cập nhật.")
+          else:
+              print("ℹ️  Không có thay đổi nào trong gradle.properties.")
+          EOF
+
+      - name: 🔢 Tăng version patch trong gradle.properties
+        id: bump_version
+        run: |
+          # Lấy version hiện tại từ gradle.properties
+          CURRENT=$(grep -E '^version\s*=' gradle.properties | head -1 | sed 's/.*=\s*//' | tr -d '[:space:]' || echo "")
+          if [ -z "$CURRENT" ]; then
+            CURRENT=$(grep -E '^pluginVersion\s*=' gradle.properties | head -1 | sed 's/.*=\s*//' | tr -d '[:space:]' || echo "1.0.0")
+          fi
+
+          echo "📌 Version hiện tại: $CURRENT"
+
+          # Tăng patch version (x.y.Z → x.y.Z+1)
+          IFS='.' read -ra PARTS <<< "$CURRENT"
+          MAJOR="${PARTS[0]:-1}"
+          MINOR="${PARTS[1]:-0}"
+          PATCH="${PARTS[2]:-0}"
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}-auto.$(date +%Y%m%d)"
+
+          echo "🆕 Version mới: $NEW_VERSION"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: 🔎 Kiểm tra có thay đổi không
+        id: check_changes
+        run: |
+          git diff --quiet && echo "has_changes=false" >> $GITHUB_OUTPUT \
+                           || echo "has_changes=true"  >> $GITHUB_OUTPUT
+
+      - name: 💾 Commit cập nhật dependency
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore(deps): auto-update dependencies [$(date +'%Y-%m-%d %H:%M UTC')]
+
+          🤖 Được tạo tự động bởi GitHub Actions
+          📅 Thời gian: $(date +'%Y-%m-%d %H:%M:%S UTC')
+          🕓 Giờ Việt Nam: $(TZ=Asia/Ho_Chi_Minh date +'%Y-%m-%d %H:%M:%S')"
+          git push
+
+  # ─────────────────────────────────────────
+  # 2. Build shadowJar
+  # ─────────────────────────────────────────
+  build:
+    name: 🔨 Build Plugin
+    runs-on: ubuntu-latest
+    needs: update-dependencies
+
+    steps:
+      - name: ⬇️ Checkout (sau khi đã cập nhật deps)
+        uses: actions/checkout@v4
+        with:
+          ref: main   # luôn lấy commit mới nhất sau khi deps được cập nhật
+
+      - name: ☕ Setup Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+
+      - name: 🗃️ Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: 🛠️ Grant execute permission cho gradlew
+        run: chmod +x gradlew
+
+      - name: 🏗️ Build shadowJar
+        run: |
+          ./gradlew shadowJar \
+            --no-daemon \
+            --stacktrace \
+            --info
+
+      - name: 📂 Liệt kê artifacts được tạo
+        run: |
+          echo "=== Danh sách JAR files ==="
+          find . -name "*.jar" -not -path "*/\.*" | sort
+
+      - name: 📤 Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-jars-${{ github.run_number }}
+          path: |
+            assembly/build/libs/*.jar
+            bukkit/build/libs/*.jar
+            bungee/build/libs/*.jar
+            velocity/build/libs/*.jar
+          retention-days: 30
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────
+  # 3. Tạo GitHub Release
+  # ─────────────────────────────────────────
+  release:
+    name: 🚀 Create Release
+    runs-on: ubuntu-latest
+    needs: [update-dependencies, build]
+    if: >
+      needs.update-dependencies.outputs.has_changes == 'true' ||
+      github.event.inputs.force_release == 'true'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: ⬇️ Download artifacts từ build job
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-jars-${{ github.run_number }}
+          path: ./release-artifacts
+
+      - name: 📂 Liệt kê artifacts chuẩn bị release
+        run: ls -lh ./release-artifacts/ 2>/dev/null || echo "Không có artifact"
+
+      - name: 🏷️ Tạo tag version mới
+        id: create_tag
+        run: |
+          DATE_TAG="auto-$(TZ=Asia/Ho_Chi_Minh date +'%Y%m%d-%H%M')"
+          echo "tag=$DATE_TAG" >> $GITHUB_OUTPUT
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$DATE_TAG" -m "Auto build: $DATE_TAG"
+          git push origin "$DATE_TAG"
+
+      - name: 📝 Tạo changelog tự động
+        id: changelog
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            LOG=$(git log "$LAST_TAG"..HEAD --oneline --no-merges | head -20 || echo "Không có commit mới")
+          else
+            LOG=$(git log --oneline --no-merges | head -10 || echo "")
+          fi
+
+          cat << EOF > release-notes.md
+          ## 🤖 Auto Build — $(TZ=Asia/Ho_Chi_Minh date +'%d/%m/%Y %H:%M') (Giờ VN)
+
+          > Build tự động hàng ngày lúc **04:00 sáng giờ Việt Nam**.
+
+          ### 📦 Thay đổi dependency
+          Đã cập nhật các thư viện lên phiên bản mới nhất.
+
+          ### 📋 Commits kể từ lần build trước
+          \`\`\`
+          $LOG
+          \`\`\`
+
+          ### 📥 Cách sử dụng
+          Tải file JAR phù hợp và đặt vào thư mục \`plugins/\` của server Minecraft:
+          - **Bukkit/Spigot/Paper** → \`MineTraxPlugin-bukkit-*.jar\`
+          - **BungeeCord** → \`MineTraxPlugin-bungee-*.jar\`
+          - **Velocity** → \`MineTraxPlugin-velocity-*.jar\`
+          EOF
+
+          echo "notes_file=release-notes.md" >> $GITHUB_OUTPUT
+
+      - name: 🚀 Tạo GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.create_tag.outputs.tag }}
+          name: "🔄 Auto Build — ${{ steps.create_tag.outputs.tag }}"
+          body_path: release-notes.md
+          draft: false
+          prerelease: true
+          files: |
+            ./release-artifacts/**/*.jar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─────────────────────────────────────────
+  # 4. Thông báo kết quả
+  # ─────────────────────────────────────────
+  notify:
+    name: 📣 Notify Result
+    runs-on: ubuntu-latest
+    needs: [update-dependencies, build, release]
+    if: always()
+
+    steps:
+      - name: ✅ Tóm tắt kết quả workflow
+        run: |
+          echo "╔══════════════════════════════════════╗"
+          echo "║     KẾT QUẢ AUTO BUILD & UPDATE      ║"
+          echo "╠══════════════════════════════════════╣"
+          echo "║ 📦 Update deps : ${{ needs.update-dependencies.result }}"
+          echo "║ 🔨 Build       : ${{ needs.build.result }}"
+          echo "║ 🚀 Release     : ${{ needs.release.result }}"
+          echo "║ 🕓 Giờ VN      : $(TZ=Asia/Ho_Chi_Minh date +'%Y-%m-%d %H:%M:%S')"
+          echo "╚══════════════════════════════════════╝"

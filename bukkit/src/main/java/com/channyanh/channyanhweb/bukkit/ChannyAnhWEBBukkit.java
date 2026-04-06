@@ -1,0 +1,471 @@
+package com.channyanh.channyanhweb.bukkit;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.channyanh.channyanhweb.bukkit.adapters.ItemStackGsonAdapter;
+import com.channyanh.channyanhweb.bukkit.commander.BukkitCommander;
+import com.channyanh.channyanhweb.bukkit.commands.AccountLinkCommand;
+import com.channyanh.channyanhweb.bukkit.commands.ChannyAnhWEBAdminCommand;
+import com.channyanh.channyanhweb.bukkit.commands.PlayerWhoisCommand;
+import com.channyanh.channyanhweb.bukkit.hooks.auth.AuthPluginHook;
+import com.channyanh.channyanhweb.bukkit.hooks.chat.EpicCoreChatHook;
+import com.channyanh.channyanhweb.bukkit.hooks.chat.VentureChatHook;
+import com.channyanh.channyanhweb.bukkit.hooks.placeholderapi.ChannyAnhWEBPlaceholderExpansion;
+import com.channyanh.channyanhweb.bukkit.hooks.skinsrestorer.SkinsRestorerHook;
+import com.channyanh.channyanhweb.bukkit.listeners.*;
+import com.channyanh.channyanhweb.bukkit.log4j.ConsoleAppender;
+import com.channyanh.channyanhweb.bukkit.log4j.ConsoleMessage;
+import com.channyanh.channyanhweb.bukkit.logging.BukkitLogger;
+import com.channyanh.channyanhweb.bukkit.schedulers.BukkitScheduler;
+import com.channyanh.channyanhweb.bukkit.tasks.AccountLinkReminderTask;
+import com.channyanh.channyanhweb.bukkit.tasks.PlayerAfkAndWorldIntelTrackerTask;
+import com.channyanh.channyanhweb.bukkit.tasks.PlayerIntelReportTask;
+import com.channyanh.channyanhweb.bukkit.tasks.ServerIntelReportTask;
+import com.channyanh.channyanhweb.bukkit.threads.ConsoleMessageQueueWorker;
+import com.channyanh.channyanhweb.bukkit.utils.PlayerIntelUtil;
+import com.channyanh.channyanhweb.bukkit.utils.FoliaUtil;
+import com.channyanh.channyanhweb.bukkit.utils.PluginUtil;
+import com.channyanh.channyanhweb.bukkit.webquery.BukkitWebQuery;
+import com.channyanh.channyanhweb.common.ChannyAnhWEBCommon;
+import com.channyanh.channyanhweb.common.data.PlayerData;
+import com.channyanh.channyanhweb.common.data.PlayerSessionIntelData;
+import com.channyanh.channyanhweb.common.enums.BanWardenPluginType;
+import com.channyanh.channyanhweb.common.enums.PlatformType;
+import com.channyanh.channyanhweb.common.interfaces.ChannyAnhWEBPlugin;
+import com.channyanh.channyanhweb.common.utils.UpdateCheckUtil;
+import com.channyanh.channyanhweb.common.webquery.WebQueryServer;
+import lombok.Getter;
+import lombok.NonNull;
+import net.kyori.adventure.platform.bukkit.BukkitAudiences;
+import net.milkbowl.vault.economy.Economy;
+import net.milkbowl.vault.permission.Permission;
+import net.skinsrestorer.api.SkinsRestorerProvider;
+import net.skinsrestorer.api.VersionProvider;
+import net.skinsrestorer.api.event.SkinApplyEvent;
+import org.apache.commons.lang.StringUtils;
+import org.bstats.bukkit.Metrics;
+import org.bukkit.Bukkit;
+import org.bukkit.event.Listener;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.plugin.RegisteredServiceProvider;
+import org.bukkit.plugin.java.JavaPlugin;
+
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+
+@Getter
+public final class ChannyAnhWEBBukkit extends JavaPlugin implements Listener, ChannyAnhWEBPlugin {
+    private ConsoleMessageQueueWorker consoleMessageQueueWorker;
+    private WebQueryServer webQueryServer;
+    private BukkitAudiences adventure;
+
+    // Console
+    private final Deque<ConsoleMessage> consoleMessageQueue = new LinkedList<>();
+    private ConsoleAppender consoleAppender;
+
+    private Boolean isEnabled;
+    private Boolean isDebugMode;
+    private String apiKey;
+    private String apiSecret;
+    private String apiServerId;
+    private String apiHost;
+    private Boolean isChatLogEnabled;
+    private Boolean isConsoleLogEnabled;
+    private String webQueryHost;
+    private int webQueryPort;
+    private List<String> webQueryWhitelistedIps;
+    private String webMessageFormat;
+    private Boolean isWhoisOnPlayerJoinEnabled;
+    private Boolean isWhoisOnCommandEnabled;
+    private String whoisNoMatchFoundMessage;
+    private List<String> whoisPlayerOnJoinMessage;
+    private List<String> whoisPlayerOnFirstJoinMessage;
+    private List<String> whoisPlayerOnCommandMessage;
+    private List<String> whoisPlayerOnAdminCommandMessage;
+    private String whoisMultiplePlayersTitleMessage;
+    private String whoisMultiplePlayersListMessage;
+    private Boolean isRemindPlayerToLinkEnabled;
+    private Boolean isServerIntelEnabled;
+    private Boolean isPlayerIntelEnabled;
+    private Long remindPlayerToLinkInterval;
+    private List<String> remindPlayerToLinkMessage;
+    private Boolean isRemindPlayerWhenAlreadyLinkedEnabled;
+    private List<String> remindPlayerWhenAlreadyLinkedMessage;
+    private List<String> playerLinkInitMessage;
+    private List<String> playerLinkInitAlreadyLinkedMessage;
+    private List<String> playerLinkErrorMessage;
+    private List<String> playerLinkSuccessMessage;
+    private List<String> playerLinkConfirmationMessage;
+    private String playerLinkConfirmationTitle;
+    private String playerLinkConfirmationSubtitle;
+    private ConcurrentHashMap<String, String> playerLinkPendingVerificationMap = new ConcurrentHashMap<>();
+    private Boolean isPlayerLinkConfirmationEnabled;
+    private long afkThresholdInMs;
+    public ConcurrentHashMap<String, PlayerData> playersDataMap;
+    public ConcurrentHashMap<String, PlayerSessionIntelData> playerSessionIntelDataMap;
+    public String serverSessionId;
+    public Boolean isAllowOnlyWhitelistedCommandsFromWeb;
+    public Boolean isSendInventoryDataToPlayerIntel;
+    public Boolean isDisablePlayerMovementTracking;
+    public List<String> whitelistedCommandsFromWeb;
+    public ConcurrentHashMap<String, String> joinAddressCache = new ConcurrentHashMap<>();
+    public Boolean hasViaVersion = false;
+    private Boolean isSkinsRestorerHookEnabled;
+    public Boolean hasSkinsRestorer = false;
+    public Boolean hasSkinsRestorerInProxyMode = false;
+    public ConcurrentHashMap<String, String[]> playerSkinCache = new ConcurrentHashMap<>();
+    public Boolean isBanWardenEnabled = false;
+    public Gson gson = null;
+    private ChannyAnhWEBCommon common;
+    private String processingMessage;
+    private String cancelledMessage;
+
+    private static Permission perms = null;
+    private static Economy economy = null;
+
+    @Override
+    public void onEnable() {
+        // Plugin startup logic
+        getLogger().info("Enabling ChannyAnhWEB Plugin...");
+
+        // Initialize an audiences instance for the plugin
+        this.adventure = BukkitAudiences.create(this);
+
+        // Config
+        this.saveDefaultConfig();
+        // Initialize Variables
+        initVariables();
+        // No need for anything if plugin is DISABLED
+        if (!isEnabled) {
+            getLogger().warning("Plugin disabled from config.yml");
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+        // Disable plugin if host, key, secret or server-id is not there
+        if (
+                apiHost == null || apiKey == null || apiSecret == null || apiServerId == null ||
+                        apiHost.isEmpty() || apiKey.isEmpty() || apiSecret.isEmpty() || apiServerId.isEmpty()
+        ) {
+            getLogger().severe("Plugin disabled due to no API information");
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+
+        // Gson Builder
+        gson = new GsonBuilder()
+                .registerTypeHierarchyAdapter(ItemStack.class, new ItemStackGsonAdapter())
+                .serializeNulls()
+                .disableHtmlEscaping()
+                .create();
+
+        // Setup Common
+        common = new ChannyAnhWEBCommon();
+        common.setPlugin(this);
+        common.setPlatformType(PlatformType.BUKKIT);
+        common.setGson(gson);
+        common.setLogger(new BukkitLogger(this));
+        common.setCommander(new BukkitCommander());
+        common.setScheduler(new BukkitScheduler(this));
+        common.setWebQuery(new BukkitWebQuery(this));
+        initBanWarden(common);
+
+        // bStats Metric,
+        initBstats();
+
+        // Register Channels
+        getServer().getMessenger().registerIncomingPluginChannel(this, ChannyAnhWEBCommon.PLUGIN_MESSAGE_CHANNEL, new BungeePluginMessageListener());
+
+        // Register Commands
+        Objects.requireNonNull(getCommand("account-link")).setExecutor(new AccountLinkCommand());
+        Objects.requireNonNull(getCommand("ww")).setExecutor(new PlayerWhoisCommand());
+        Objects.requireNonNull(getCommand("channyanhweb")).setExecutor(new ChannyAnhWEBAdminCommand());
+
+        // Register Listeners
+        getServer().getPluginManager().registerEvents(new PlayerChatListener(), this);
+        getServer().getPluginManager().registerEvents(new PlayerDeathListener(), this);
+        getServer().getPluginManager().registerEvents(new PlayerJoinLeaveListener(), this);
+        getServer().getPluginManager().registerEvents(new PlayerKickBanListener(), this);
+        getServer().getPluginManager().registerEvents(new ServerBroadcastListener(), this);
+        getServer().getPluginManager().registerEvents(new EntityDeathEventListener(), this);
+        getServer().getPluginManager().registerEvents(new BlockBreakListener(), this);
+        getServer().getPluginManager().registerEvents(new BlockPlaceListener(), this);
+        getServer().getPluginManager().registerEvents(new PlayerDropItemListener(), this);
+        getServer().getPluginManager().registerEvents(new EntityPickupItemListener(), this);
+        getServer().getPluginManager().registerEvents(new PlayerItemBreakListener(), this);
+        getServer().getPluginManager().registerEvents(new PlayerItemConsumeListener(), this);
+        getServer().getPluginManager().registerEvents(new PlayerMoveListener(), this);
+        getServer().getPluginManager().registerEvents(new PlayerCommandListener(), this);
+        getServer().getPluginManager().registerEvents(new CraftItemListener(), this);
+        getServer().getPluginManager().registerEvents(new EnchantItemListener(), this);
+        getServer().getPluginManager().registerEvents(new FishCatchListener(), this);
+        getServer().getPluginManager().registerEvents(new PlayerBedEnterListener(), this);
+        getServer().getPluginManager().registerEvents(new ProjectileLaunchListener(), this);
+        getServer().getPluginManager().registerEvents(new RaidFinishListener(), this);
+        getServer().getPluginManager().registerEvents(new PlayerDamageListener(), this);
+        getServer().getPluginManager().registerEvents(new PlayerLoginListener(), this);
+
+        // Register Listeners only required for ChatLogs
+        if (isChatLogEnabled) {
+            // Register Plugin Hook Listeners only if its plugin exists
+            if (PluginUtil.checkIfPluginEnabled("VentureChat")) {
+                getLogger().info("Venture Chat is found! Adding Hook...");
+                try {
+                    VentureChatHook.register();
+                } catch (Exception e) {
+                    getLogger().warning("Failed to hook into VentureChat: " + e.getMessage());
+                }
+            }
+
+            if (PluginUtil.checkIfPluginEnabled("EpicCore")) {
+                getLogger().info("EpicCore is found! Adding Hook...");
+                try {
+                    EpicCoreChatHook.register();
+                } catch (Exception e) {
+                    getLogger().warning("Failed to hook into EpicCore: " + e.getMessage());
+                }
+            }
+        }
+
+        if (isConsoleLogEnabled) {
+            // Attach appender to queue console messages
+            consoleAppender = new ConsoleAppender();
+            // start console message queue worker thread
+            if (consoleMessageQueueWorker != null) {
+                if (consoleMessageQueueWorker.getState() != Thread.State.NEW) {
+                    consoleMessageQueueWorker.interrupt();
+                    consoleMessageQueueWorker = new ConsoleMessageQueueWorker();
+                }
+            } else {
+                consoleMessageQueueWorker = new ConsoleMessageQueueWorker();
+            }
+            consoleMessageQueueWorker.start();
+        }
+
+        // Start WebQuery Server
+        startWebQueryServer();
+
+        // Vault API Setup
+        boolean hasVaultPermission = setupVaultPermission();
+        if (!hasVaultPermission) {
+            getLogger().info("No Vault supported permission plugin found.");
+        } else {
+            getLogger().info("Vault Permission Plugin: " + perms.getName());
+        }
+        boolean hasVaultEconomy = setupVaultEconomy();
+        if (!hasVaultEconomy) {
+            getLogger().info("No Vault supported economy plugin found.");
+        } else {
+            getLogger().info("Vault Economy Plugin: " + economy.getName());
+        }
+
+        // Setup Auth Plugin Hooks (nLogin, AuthMe) - must be before schedulers
+        AuthPluginHook.init();
+
+        // Setup Schedulers (Folia + Paper/Spigot compatible)
+        if (FoliaUtil.isFolia()) {
+            getLogger().info("Folia detected! Using Folia-compatible async scheduler.");
+        }
+        if (isRemindPlayerToLinkEnabled) {
+            FoliaUtil.scheduleAsyncRepeating(this, new AccountLinkReminderTask(), remindPlayerToLinkInterval * 20L, remindPlayerToLinkInterval * 20L);
+        }
+        if (isServerIntelEnabled) {
+            FoliaUtil.scheduleAsyncRepeating(this, new ServerIntelReportTask(), 60 * 20L, 60 * 20L);   // every minute
+        }
+        if (isPlayerIntelEnabled) {
+            FoliaUtil.scheduleAsyncRepeating(this, new PlayerIntelReportTask(), 5 * 60 * 20L, 5 * 60 * 20L);   // every 5 minutes
+            FoliaUtil.scheduleAsyncRepeating(this, new PlayerAfkAndWorldIntelTrackerTask(), 20L, 20L);   // Run every second
+        }
+
+        // Setup PlaceholderAPI
+        if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
+            getLogger().info("Hooking into PlaceholderAPI.");
+            new ChannyAnhWEBPlaceholderExpansion(this).register();
+        }
+
+        // Check if ViaVersion is installed
+        if (PluginUtil.checkIfPluginEnabled("ViaVersion")) {
+            getLogger().info("ViaVersion is found! Will use it to get player version.");
+            hasViaVersion = true;
+        }
+
+        // Check if SkinsRestorer is installed
+        if (PluginUtil.checkIfPluginEnabled("SkinsRestorer")) {
+            hasSkinsRestorer = setupSkinsRestorer();
+        }
+
+        // Check for Plugin Updates.
+        UpdateCheckUtil.checkForUpdate(102635, this.getDescription().getVersion());
+
+        getLogger().info("ChannyAnhWEB Plugin Enabled!");
+    }
+
+    @Override
+    public void onDisable() {
+        // Plugin shutdown logic
+        getLogger().info("ChannyAnhWEB Plugin Disabled!");
+        if (webQueryServer != null) {
+            webQueryServer.shutdown();
+        }
+
+        if (isPlayerIntelEnabled) {
+            getLogger().info("Please wait.. Reporting all pending PlayerIntel");
+            for (PlayerSessionIntelData playerSessionData : playerSessionIntelDataMap.values()) {
+                PlayerIntelUtil.reportPlayerIntel(playerSessionData, true);
+            }
+        }
+
+        if (this.adventure != null) {
+            this.adventure.close();
+            this.adventure = null;
+        }
+    }
+
+    private void initBstats() {
+        int pluginId = 15485;
+        Metrics metrics = new Metrics(this, pluginId);
+    }
+
+    private void initVariables() {
+        playersDataMap = new ConcurrentHashMap<>();
+        playerSessionIntelDataMap = new ConcurrentHashMap<>();
+
+        isEnabled = this.getConfig().getBoolean("enabled");
+        apiHost = this.getConfig().getString("api-host");
+        if (apiHost != null) {
+            apiHost = StringUtils.strip(apiHost, "/");
+        }
+        isDebugMode = this.getConfig().getBoolean("debug-mode");
+        apiKey = this.getConfig().getString("api-key");
+        apiSecret = this.getConfig().getString("api-secret");
+        apiServerId = this.getConfig().getString("server-id");
+        isChatLogEnabled = this.getConfig().getBoolean("enable-chatlog");
+        isConsoleLogEnabled = this.getConfig().getBoolean("enable-consolelog");
+        webQueryHost = this.getConfig().getString("webquery-host");
+        webQueryPort = this.getConfig().getInt("webquery-port");
+        webQueryWhitelistedIps = this.getConfig().getStringList("webquery-whitelisted-ips");
+        webMessageFormat = this.getConfig().getString("web-message-format");
+        isWhoisOnPlayerJoinEnabled = this.getConfig().getBoolean("enable-whois-on-player-join");
+        isWhoisOnCommandEnabled = this.getConfig().getBoolean("enable-whois-on-command");
+        whoisNoMatchFoundMessage = this.getConfig().getString("whois-no-match-found-message");
+        whoisPlayerOnJoinMessage = this.getConfig().getStringList("whois-player-on-join-message");
+        whoisPlayerOnFirstJoinMessage = this.getConfig().getStringList("whois-player-on-first-join-message");
+        whoisPlayerOnCommandMessage = this.getConfig().getStringList("whois-player-on-command-message");
+        whoisPlayerOnAdminCommandMessage = this.getConfig().getStringList("whois-player-on-admin-command-message");
+        whoisMultiplePlayersTitleMessage = this.getConfig().getString("whois-multiple-players-title-message");
+        whoisMultiplePlayersListMessage = this.getConfig().getString("whois-multiple-players-list-message");
+        isRemindPlayerToLinkEnabled = this.getConfig().getBoolean("remind-player-to-link");
+        isServerIntelEnabled = this.getConfig().getBoolean("report-server-intel");
+        isPlayerIntelEnabled = this.getConfig().getBoolean("report-player-intel");
+        remindPlayerToLinkInterval = this.getConfig().getLong("remind-player-interval");
+        remindPlayerToLinkMessage = this.getConfig().getStringList("remind-player-link-message");
+        isRemindPlayerWhenAlreadyLinkedEnabled = this.getConfig().getBoolean("remind-player-when-already-linked", false);
+        remindPlayerWhenAlreadyLinkedMessage = this.getConfig().getStringList("remind-player-already-linked-message");
+        playerLinkInitMessage = this.getConfig().getStringList("player-link-init-message");
+        playerLinkInitAlreadyLinkedMessage = this.getConfig().getStringList("player-link-init-already-linked-message");
+        playerLinkErrorMessage = this.getConfig().getStringList("player-link-error-message");
+        playerLinkSuccessMessage = this.getConfig().getStringList("player-link-success-message");
+        isPlayerLinkConfirmationEnabled = this.getConfig().getBoolean("enable-player-link-confirmation", true);
+        playerLinkConfirmationMessage = this.getConfig().getStringList("player-link-confirmation-message");
+        playerLinkConfirmationTitle = this.getConfig().getString("player-link-confirmation-title");
+        playerLinkConfirmationSubtitle = this.getConfig().getString("player-link-confirmation-subtitle");
+        afkThresholdInMs = this.getConfig().getLong("afk-threshold-in-seconds", 300) * 1000;
+        isAllowOnlyWhitelistedCommandsFromWeb = this.getConfig().getBoolean("allow-only-whitelisted-commands-from-web");
+        whitelistedCommandsFromWeb = this.getConfig().getStringList("whitelisted-commands-from-web");
+        isSendInventoryDataToPlayerIntel = this.getConfig().getBoolean("send-inventory-data-to-player-intel");
+        isDisablePlayerMovementTracking = this.getConfig().getBoolean("disable-player-movement-tracking");
+        isSkinsRestorerHookEnabled = this.getConfig().getBoolean("enable-skinsrestorer-hook", true);
+        isBanWardenEnabled = this.getConfig().getBoolean("enable-banwarden", true);
+        serverSessionId = UUID.randomUUID().toString();
+        processingMessage = this.getConfig().getString("processing-message", "&6Processing...");
+        cancelledMessage = this.getConfig().getString("cancelled-message", "&cCancelled!");
+    }
+
+    private void startWebQueryServer() {
+        webQueryServer = new WebQueryServer(webQueryHost, webQueryPort, webQueryWhitelistedIps);
+        webQueryServer.start();
+    }
+
+    private Boolean setupSkinsRestorer() {
+        if (!isSkinsRestorerHookEnabled) {
+            getLogger().info("SkinsRestorer is found! But SkinsRestorer hook is disabled in config.");
+            return false;
+        }
+
+        getLogger().info("Hooking into SkinsRestorer...");
+
+        // Add SkinsRestorerHook
+        try {
+            common.setSkinsRestorerApi(SkinsRestorerProvider.get());
+            common.getSkinsRestorerApi().getEventBus().subscribe(this, SkinApplyEvent.class, new SkinsRestorerHook());
+
+            // Warn if SkinsRestorer is not compatible with v15
+            if (!VersionProvider.isCompatibleWith("15")) {
+                getLogger().warning("ChannyAnhWEB supports SkinsRestorer v15, but " + VersionProvider.getVersionInfo() + " is installed. There may be errors!");
+            }
+            getLogger().info("Hooked into SkinsRestorer!");
+            return true;
+        } catch (Exception e) {
+            getLogger().warning("SkinsRestorer is found, but seems to be in Proxy mode.");
+            getLogger().info("Hooked into SkinsRestorer in Proxy mode!");
+            hasSkinsRestorerInProxyMode = true;
+            return true;
+        }
+    }
+
+    private boolean setupVaultPermission() {
+        RegisteredServiceProvider<Permission> rsp = getServer().getServicesManager().getRegistration(Permission.class);
+        if (rsp == null) {
+            return false;
+        }
+        perms = rsp.getProvider();
+        return true;
+    }
+
+    private boolean setupVaultEconomy() {
+        RegisteredServiceProvider<Economy> rsp = getServer().getServicesManager().getRegistration(Economy.class);
+        if (rsp == null) {
+            return false;
+        }
+        economy = rsp.getProvider();
+        return true;
+    }
+
+    public static Permission getVaultPermission() {
+        return perms;
+    }
+
+    public static Economy getVaultEconomy() {
+        return economy;
+    }
+
+    public static ChannyAnhWEBBukkit getPlugin() {
+        return getPlugin(ChannyAnhWEBBukkit.class);
+    }
+
+    public @NonNull BukkitAudiences adventure() {
+        if (this.adventure == null) {
+            throw new IllegalStateException("Tried to access Adventure when the plugin was disabled!");
+        }
+        return this.adventure;
+    }
+
+    private void initBanWarden(ChannyAnhWEBCommon common) {
+        if (!isBanWardenEnabled) {
+            getLogger().warning("[BanWarden] BanWarden is disabled in config.yml");
+            return;
+        }
+
+        // set which ban plugin is enabled.
+        if (PluginUtil.checkIfPluginEnabled("LiteBans")) {
+            common.initBanWarden(BanWardenPluginType.LITEBANS);
+        } else if (PluginUtil.checkIfPluginEnabled("LibertyBans")) {
+            common.initBanWarden(BanWardenPluginType.LIBERTYBANS);
+        } else if (PluginUtil.checkIfPluginEnabled("AdvancedBan")) {
+            common.initBanWarden(BanWardenPluginType.ADVANCEDBAN);
+        } else {
+            isBanWardenEnabled = false;
+            getLogger().warning("[BanWarden] No supported BanWarden plugin found.");
+            return;
+        }
+    }
+}

@@ -1,0 +1,97 @@
+plugins {
+    id 'java'
+    id "com.gradleup.shadow" version "8.3.6"
+    id 'maven-publish'
+    id 'eclipse'
+    id "org.jetbrains.gradle.plugin.idea-ext" version "1.0.1"
+}
+
+allprojects {
+    group = 'com.channyanh'
+    description = 'ChannyAnhWEB'
+    version = '1.0.0'
+
+    repositories {
+        mavenLocal()
+        mavenCentral()
+
+        maven { url 'https://jitpack.io' }
+        maven { url 'https://repo.enonic.com/public/' }
+        maven { url "https://oss.sonatype.org/content/groups/public/" }
+        maven { url "https://repo.aikar.co/content/groups/aikar/" }
+        maven { url 'https://repo.papermc.io/repository/maven-public/' }
+        maven { url 'https://hub.spigotmc.org/nexus/content/groups/public/' }
+        maven { url 'https://hub.spigotmc.org/nexus/content/repositories/snapshots/' }
+        maven { url 'https://repo.extendedclip.com/content/repositories/placeholderapi/' }
+        maven { url 'https://repo.viaversion.com' }
+        maven { url 'https://repo.codemc.org/repository/maven-public/' }
+        maven { url 'https://repo.maven.apache.org/maven2/' }
+        maven { url 'https://repo.minebench.de' }
+
+        // LibertyBans
+        maven { url 'https://mvn-repo.arim.space/lesser-gpl3/' }
+        maven { url 'https://mvn-repo.arim.space/gpl3/' }
+        maven { url 'https://mvn-repo.arim.space/affero-gpl3/' }
+    }
+}
+
+subprojects {
+    ext {
+        toolkitJavaVersion = 21
+        targetJavaVersion = 17
+    }
+
+    apply plugin: "java"
+    apply plugin: "com.gradleup.shadow"
+    apply plugin: "maven-publish"
+
+    dependencies {
+        compileOnly 'org.projectlombok:lombok:1.18.32'
+        annotationProcessor 'org.projectlombok:lombok:1.18.32'
+        testCompileOnly 'org.projectlombok:lombok:1.18.32'
+        testAnnotationProcessor 'org.projectlombok:lombok:1.18.32'
+        compileOnly 'org.jetbrains:annotations:22.0.0'
+        implementation 'commons-codec:commons-codec:1.15'
+        implementation 'org.apache.commons:commons-lang3:3.14.0'
+        compileOnly 'io.netty:netty-all:4.1.86.Final'
+        implementation 'com.google.code.gson:gson:2.10.1'
+        compileOnly 'net.skinsrestorer:skinsrestorer-api:15.0.15'
+        implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+        // BanWarden
+        compileOnly "space.arim.libertybans:bans-api:1.0.4"
+        compileOnly "com.gitlab.ruany:LiteBansAPI:0.5.0"
+        compileOnly "com.github.DevLeoko.AdvancedBan:AdvancedBan:v2.3.0"
+    }
+
+    def toolkitJavaVersion = project.ext.toolkitJavaVersion as int
+    java {
+        def targetJavaVersion = project.ext.targetJavaVersion
+        def javaVersion = JavaVersion.toVersion(targetJavaVersion)
+        sourceCompatibility = javaVersion
+        targetCompatibility = javaVersion
+        toolchain.languageVersion.set(JavaLanguageVersion.of(toolkitJavaVersion))
+    }
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+
+        if (targetJavaVersion >= 10 || JavaVersion.current().isJava10Compatible()) {
+            options.release.set(targetJavaVersion)
+        }
+    }
+
+    tasks.withType(Javadoc).configureEach {
+        options.encoding = 'UTF-8'
+    }
+
+    // Common relocation patterns for shadowJar
+    shadowJar {
+        relocate('org.bstats', 'com.channyanh.channyanhweb.libs.bstats')
+        relocate('com.google.gson', 'com.channyanh.channyanhweb.libs.google.gson')
+        relocate('org.apache.commons.codec', 'com.channyanh.channyanhweb.libs.apache.commons.codec')
+        relocate('org.apache.commons.lang3', 'com.channyanh.channyanhweb.libs.apache.commons.lang3')
+        relocate('okio', 'com.channyanh.channyanhweb.libs.okio')
+        relocate('okhttp3', 'com.channyanh.channyanhweb.libs.okhttp3')
+    }
+}

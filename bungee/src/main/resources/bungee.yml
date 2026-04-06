@@ -1,0 +1,5 @@
+name: ChannyAnhWEB
+version: '${version}'
+main: com.channyanh.channyanhweb.bungee.ChannyAnhWEBBungee
+author: ChannyAnh
+softDepends: ['SkinsRestorer', 'LiteBans']

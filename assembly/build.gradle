@@ -1,0 +1,38 @@
+dependencies {
+    implementation project(":common")
+    implementation project(":bukkit")
+    implementation project(":bungee")
+    implementation project(":velocity")
+}
+
+java {
+    def targetJavaVersion = project.ext.targetJavaVersion
+    def javaVersion = JavaVersion.toVersion(targetJavaVersion)
+    sourceCompatibility = javaVersion
+    targetCompatibility = javaVersion
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+
+    if (targetJavaVersion >= 10 || JavaVersion.current().isJava10Compatible()) {
+        options.release.set(targetJavaVersion)
+    }
+}
+
+shadowJar {
+    archiveFileName = "ChannyAnhWEB-${project.version}.jar"
+    
+    // Additional relocations specific to the final assembly
+    relocate('org.intellij.lang.annotations', 'com.channyanh.channyanhweb.libs.intellij.lang.annotations')
+    relocate('org.jetbrains.annotations', 'com.channyanh.channyanhweb.libs.jetbrains.annotations')
+    relocate('de.themoep', 'com.channyanh.channyanhweb.libs.themoep')
+    relocate('dev.dejvokep.boostedyaml', 'com.channyanh.channyanhweb.libs.dejvokep.boostedyaml')
+
+    /**
+     * Note: Kyori's relocation causes issue with Velocity.
+     * We can't use adventure functions in velocity if its relocated.
+     * Keeping it commented for sometime to see if not relocating it fixes the issue with Bukkit.
+     */
+     // relocate('net.kyori', 'com.channyanh.channyanhweb.libs.kyori')
+}

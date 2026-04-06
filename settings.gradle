@@ -1,0 +1,14 @@
+pluginManagement {
+    plugins {
+        // Remove unused Kotlin plugin since it's not used in this project
+    }
+}
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.5.0'
+}
+rootProject.name = 'ChannyAnhWEB'
+include 'common'
+include 'bukkit'
+include 'bungee'
+include 'velocity'
+include 'assembly'

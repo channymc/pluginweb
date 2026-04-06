@@ -1,0 +1,239 @@
+package com.channyanh.channyanhweb.bungee;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.channyanh.channyanhweb.bungee.commander.BungeeCommander;
+import com.channyanh.channyanhweb.bungee.commands.ChannyAnhWEBAdminCommand;
+import com.channyanh.channyanhweb.bungee.hooks.skinsrestorer.SkinsRestorerHook;
+import com.channyanh.channyanhweb.bungee.listeners.ServerConnectedListener;
+import com.channyanh.channyanhweb.bungee.logging.BungeeLogger;
+import com.channyanh.channyanhweb.bungee.schedulers.BungeeScheduler;
+import com.channyanh.channyanhweb.bungee.tasks.ServerIntelReportTask;
+import com.channyanh.channyanhweb.bungee.utils.PluginUtil;
+import com.channyanh.channyanhweb.bungee.webquery.BungeeWebQuery;
+import com.channyanh.channyanhweb.common.ChannyAnhWEBCommon;
+import com.channyanh.channyanhweb.common.enums.BanWardenPluginType;
+import com.channyanh.channyanhweb.common.enums.PlatformType;
+import com.channyanh.channyanhweb.common.interfaces.ChannyAnhWEBPlugin;
+import com.channyanh.channyanhweb.common.webquery.WebQueryServer;
+import lombok.Getter;
+import net.md_5.bungee.api.plugin.Plugin;
+import net.md_5.bungee.config.Configuration;
+import net.md_5.bungee.config.ConfigurationProvider;
+import net.md_5.bungee.config.YamlConfiguration;
+import net.skinsrestorer.api.SkinsRestorerProvider;
+import net.skinsrestorer.api.VersionProvider;
+import net.skinsrestorer.api.event.SkinApplyEvent;
+import org.bstats.bungeecord.Metrics;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
+@Getter
+public final class ChannyAnhWEBBungee extends Plugin implements ChannyAnhWEBPlugin {
+    @Getter
+    private static ChannyAnhWEBBungee plugin;
+
+    private WebQueryServer webQueryServer;
+    private Configuration config;
+
+    private Boolean isEnabled;
+    private Boolean isDebugMode;
+    private String apiKey;
+    private String apiSecret;
+    private String apiServerId;
+    private String apiHost;
+    private Boolean isConsoleLogEnabled;
+    private String webQueryHost;
+    private int webQueryPort;
+    private List<String> webQueryWhitelistedIps;
+    private Boolean isServerIntelEnabled;
+    public String serverSessionId;
+    public Boolean isAllowOnlyWhitelistedCommandsFromWeb;
+    public List<String> whitelistedCommandsFromWeb;
+    public ConcurrentHashMap<String, String> joinAddressCache = new ConcurrentHashMap<>();
+    public Boolean hasSkinsRestorer = false;
+    public Boolean isSkinsRestorerHookEnabled;
+    public Boolean isBanWardenEnabled = false;
+    public Gson gson = null;
+    private ChannyAnhWEBCommon common;
+
+    @Override
+    public void onEnable() {
+        plugin = this;
+
+        // Load configuration
+        loadConfig();
+        initVariables();
+        if (!isEnabled) {
+            getLogger().warning("Plugin disabled from config.yml");
+            return;
+        }
+        // Disable plugin if host, key, secret or server-id is not there
+        if (
+                apiHost == null || apiKey == null || apiSecret == null || apiServerId == null ||
+                        apiHost.isEmpty() || apiKey.isEmpty() || apiSecret.isEmpty() || apiServerId.isEmpty()
+        ) {
+            getLogger().severe("Plugin disabled due to no API information");
+            return;
+        }
+
+        // GSON builder
+        gson = new GsonBuilder()
+                .serializeNulls()
+                .disableHtmlEscaping()
+                .create();
+
+        // Setup Common
+        common = new ChannyAnhWEBCommon();
+        common.setPlugin(this);
+        common.setPlatformType(PlatformType.BUNGEE);
+        common.setGson(gson);
+        common.setLogger(new BungeeLogger(this));
+        common.setCommander(new BungeeCommander());
+        common.setScheduler(new BungeeScheduler(this));
+        common.setWebQuery(new BungeeWebQuery(this));
+        initBanWarden(common);
+
+        // init Bstats
+        initBstats();
+
+        // Start web query server
+        startWebQueryServer();
+
+        // Hook into plugins
+        if (PluginUtil.checkIfPluginEnabled("SkinsRestorer")) {
+            hasSkinsRestorer = setupSkinsRestorer();
+        }
+
+        // Register Channels
+        getProxy().registerChannel(ChannyAnhWEBCommon.PLUGIN_MESSAGE_CHANNEL);
+
+        // Register Listeners
+        getProxy().getPluginManager().registerListener(this, new ServerConnectedListener());
+
+        // Register Commands
+        getProxy().getPluginManager().registerCommand(this, new ChannyAnhWEBAdminCommand(this));
+
+        // Register Tasks
+        if (isServerIntelEnabled) {
+            getProxy().getScheduler().schedule(this, new ServerIntelReportTask(), 60, 60, java.util.concurrent.TimeUnit.SECONDS);
+        }
+    }
+
+    @Override
+    public void onDisable() {
+        webQueryServer.shutdown();
+
+        // Unregister channels
+        getProxy().unregisterChannel(ChannyAnhWEBCommon.PLUGIN_MESSAGE_CHANNEL);
+    }
+
+    private void loadConfig() {
+        if (!getDataFolder().exists()) {
+            if (!getDataFolder().mkdir()) {
+                throw new RuntimeException("Unable to create the plugin data folder " + getDataFolder());
+            }
+        }
+
+        File configFile = new File(getDataFolder(), "config.yml");
+        if (!configFile.exists()) {
+            try {
+                getLogger().info("Please wait. Configuring ChannyAnhWEB for the first time...");
+                if (!configFile.createNewFile()) {
+                    throw new IOException("Unable to create the config file at " + configFile);
+                }
+
+                Files.copy(getResourceAsStream("bungeeConfig.yml"), configFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            } catch (Exception e) {
+                throw new RuntimeException("Unable to create configuration file", e);
+            }
+        }
+
+        try {
+            config = ConfigurationProvider.getProvider(YamlConfiguration.class).load(configFile);
+        } catch (IOException e) {
+            throw new RuntimeException("Unable to load configuration", e);
+        }
+    }
+
+    private void initVariables() {
+        isEnabled = config.getBoolean("enabled", true);
+        isDebugMode = config.getBoolean("debug-mode", false);
+        apiKey = config.getString("api-key", null);
+        apiSecret = config.getString("api-secret", null);
+        apiServerId = String.valueOf(config.getInt("server-id", 0));
+        apiHost = config.getString("api-host", null);
+        webQueryHost = config.getString("webquery-host", null);
+        webQueryPort = config.getInt("webquery-port", 25575);
+        webQueryWhitelistedIps = config.getStringList("webquery-whitelisted-ips");
+        isServerIntelEnabled = config.getBoolean("report-server-intel", false);
+        isConsoleLogEnabled = config.getBoolean("enable-consolelog", true);
+        isAllowOnlyWhitelistedCommandsFromWeb = config.getBoolean("allow-only-whitelisted-commands-from-web", false);
+        whitelistedCommandsFromWeb = config.getStringList("whitelisted-commands-from-web");
+        isSkinsRestorerHookEnabled = config.getBoolean("enable-skinsrestorer-hook", true);
+        isBanWardenEnabled = config.getBoolean("enable-banwarden", true);
+        serverSessionId = UUID.randomUUID().toString();
+    }
+
+    private void initBstats() {
+        int pluginId = 26167;
+        Metrics metrics = new Metrics(this, pluginId);
+    }
+
+    private void startWebQueryServer() {
+        webQueryServer = new WebQueryServer(webQueryHost, webQueryPort, webQueryWhitelistedIps);
+        webQueryServer.start();
+    }
+
+    private Boolean setupSkinsRestorer() {
+        if (!isSkinsRestorerHookEnabled) {
+            getLogger().info("SkinsRestorer is found! But SkinsRestorer hook is disabled in config.");
+            return false;
+        }
+
+        getLogger().info("Hooking into SkinsRestorer...");
+
+        // Add SkinsRestorerHook
+        try {
+            common.setSkinsRestorerApi(SkinsRestorerProvider.get());
+            common.getSkinsRestorerApi().getEventBus().subscribe(this, SkinApplyEvent.class, new SkinsRestorerHook());
+
+            // Warn if SkinsRestorer is not compatible with v15
+            if (!VersionProvider.isCompatibleWith("15")) {
+                getLogger().warning("ChannyAnhWEB supports SkinsRestorer v15, but " + VersionProvider.getVersionInfo() + " is installed. There may be errors!");
+            }
+            getLogger().info("Hooked into SkinsRestorer!");
+            return true;
+        } catch (Exception e) {
+            getLogger().warning("ChannyAnhWEB failed to hook into SkinsRestorer!");
+            getLogger().warning("Error: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void initBanWarden(ChannyAnhWEBCommon common) {
+        if (!isBanWardenEnabled) {
+            getLogger().warning("[BanWarden] BanWarden is disabled in config.yml");
+            return;
+        }
+
+        // set which ban plugin is enabled.
+        if (PluginUtil.checkIfPluginEnabled("LiteBans")) {
+            common.initBanWarden(BanWardenPluginType.LITEBANS);
+        } else if (PluginUtil.checkIfPluginEnabled("LibertyBans")) {
+            common.initBanWarden(BanWardenPluginType.LIBERTYBANS);
+        } else if (PluginUtil.checkIfPluginEnabled("AdvancedBan")) {
+            common.initBanWarden(BanWardenPluginType.ADVANCEDBAN);
+        } else {
+            isBanWardenEnabled = false;
+            getLogger().warning("[BanWarden] No supported BanWarden plugin found.");
+            return;
+        }
+    }
+}

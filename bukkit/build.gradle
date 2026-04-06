@@ -1,0 +1,30 @@
+dependencies {
+    implementation project(":common")
+    implementation 'org.bstats:bstats-bukkit:3.0.2'
+    implementation "net.kyori:adventure-platform-bukkit:4.3.2" // don't update. /verify 123456 is breaking
+    implementation "de.themoep:minedown-adventure:1.7.1-SNAPSHOT"
+    compileOnly 'io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT'
+    compileOnly 'com.github.MilkBowl:VaultAPI:1.7'
+    compileOnly 'org.apache.logging.log4j:log4j-core:2.17.2'
+    compileOnly 'me.clip:placeholderapi:2.11.6'
+    compileOnly 'com.viaversion:viaversion-api:5.0.0'
+    
+    // Optional chat plugin hooks (place JARs in /libs/ if needed for compilation)
+    // compileOnly files('libs/VentureChat-3.7.2.jar')
+    // compileOnly files('libs/EpicCore-1.6.jar')
+}
+
+processResources {
+    def props = [version: version]
+    inputs.properties props
+    filteringCharset 'UTF-8'
+    filesMatching('plugin.yml') {
+        expand props
+    }
+}
+
+shadowJar {
+    // Additional bukkit-specific relocations
+    relocate('net.kyori', 'com.channyanh.channyanhweb.libs.kyori')
+    relocate('de.themoep', 'com.channyanh.channyanhweb.libs.themoep')
+}

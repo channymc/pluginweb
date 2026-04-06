@@ -1,0 +1,111 @@
+package com.channyanh.channyanhweb.common.webquery.protocol;
+
+import com.google.gson.JsonObject;
+import com.channyanh.channyanhweb.common.ChannyAnhWEBCommon;
+import com.channyanh.channyanhweb.common.data.WebQueryRequestData;
+import com.channyanh.channyanhweb.common.enums.BanWardenPunishmentType;
+import com.channyanh.channyanhweb.common.utils.CryptoUtil;
+import com.channyanh.channyanhweb.common.utils.GsonUtil;
+import com.channyanh.channyanhweb.common.utils.LoggingUtil;
+
+public class WebQueryProtocol {
+    private static final ChannyAnhWEBCommon common = ChannyAnhWEBCommon.getInstance();
+
+    public static String processInput(String input) throws Exception {
+        // Return null if input is empty.
+        if (input == null || input.isEmpty()) {
+            throw new Exception("Empty request");
+        }
+
+        // Decrypt the input to plain text and map in JSON object.
+        WebQueryRequestData requestData = decryptRequest(input);
+        if (requestData == null) {
+            throw new Exception("Invalid request data");
+        }
+
+        LoggingUtil.debug("[WebQuery] Request: " + requestData.toString());
+
+        // Validate signature.
+        if (!validateSignature(requestData)) {
+            throw new Exception("Invalid signature");
+        }
+
+        String payload = requestData.getPayload();
+        JsonObject payloadJson = common.getGson().fromJson(payload, JsonObject.class);
+        String type = payloadJson.get("type").getAsString();
+
+        String response;
+        switch (type) {
+            case "status":
+                response = common.getWebQuery().handleStatus();
+                break;
+            case "ping":
+                response = common.getWebQuery().handlePing();
+                break;
+            case "user-say":
+                String username = payloadJson.get("username").getAsString();
+                String message = payloadJson.get("message").getAsString();
+                response = common.getWebQuery().handleUserSay(username, message);
+                break;
+            case "broadcast":
+                String broadcastMessage = payloadJson.get("message").getAsString();
+                response = common.getWebQuery().handleBroadcast(broadcastMessage);
+                break;
+            case "command":
+                String command = payloadJson.get("command").getAsString();
+                response = common.getWebQuery().handleCommand(command);
+                break;
+            case "set-player-skin":
+                String playerUuid = payloadJson.get("player_uuid").getAsString();
+                String changeCommandType = payloadJson.get("change_command_type").getAsString();
+                String value = payloadJson.get("value").isJsonNull() ? null : payloadJson.get("value").getAsString();
+                response = common.getWebQuery().handleSetPlayerSkin(playerUuid, changeCommandType, value);
+                break;
+            case "account-link-success":
+                String pUuid = payloadJson.get("player_uuid").getAsString();
+                String userId = payloadJson.get("user_id").getAsString();
+                response = common.getWebQuery().handleAccountLinkSuccess(pUuid, userId);
+                break;
+            case "check-player-online":
+                String playerUuidForCheck = payloadJson.get("player_uuid").getAsString();
+                response = common.getWebQuery().handleCheckPlayerOnline(playerUuidForCheck);
+                break;
+            case "banwarden-punish":
+                response = "Work in progress";
+                break;
+            case "banwarden-pardon":
+                String pType = payloadJson.get("punishment_type").getAsString();
+                BanWardenPunishmentType punishmentType = BanWardenPunishmentType.valueOf(pType.toUpperCase());
+                String victim = payloadJson.get("victim").getAsString();
+                String reason = GsonUtil.getAsString(payloadJson.get("reason"), null);
+                String admin = GsonUtil.getAsString(payloadJson.get("admin"), null);
+                response = common.getWebQuery().handleBanwardenPardon(punishmentType, victim, reason, admin);
+                break;
+            default:
+                throw new Exception("Invalid webquery command type");
+        }
+
+        LoggingUtil.debug("[WebQuery] Plain Response: " + response);
+        // Encrypt the response and return.
+        return encryptResponse(response);
+    }
+
+    private static WebQueryRequestData decryptRequest(String input) {
+        String apiKey = common.getPlugin().getApiKey();
+        String decrypted = CryptoUtil.getDecryptedString(apiKey, input);
+
+        return common.getGson().fromJson(decrypted, WebQueryRequestData.class);
+    }
+
+    private static String encryptResponse(String response) {
+        return CryptoUtil.getEncryptedString(common.getPlugin().getApiKey(), response);
+    }
+
+    private static boolean validateSignature(WebQueryRequestData requestData) {
+        String secretKey = common.getPlugin().getApiSecret().substring(0, 32);
+        String signature = requestData.getSignature();
+        String payload = requestData.getPayload();
+
+        return CryptoUtil.verifyHmacSignature(secretKey, payload, signature);
+    }
+}

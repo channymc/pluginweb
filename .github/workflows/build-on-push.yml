@@ -1,0 +1,79 @@
+# ============================================================
+#  build-on-push.yml
+#  Build kiểm tra nhanh khi push lên main hoặc tạo Pull Request
+# ============================================================
+
+name: ✅ Build Check
+
+on:
+  push:
+    branches: [ main, master, dev ]
+    paths-ignore:
+      - "**.md"
+      - ".gitignore"
+      - ".vscode/**"
+
+  pull_request:
+    branches: [ main, master ]
+
+  # Cho phép chạy thủ công
+  workflow_dispatch:
+
+env:
+  JAVA_VERSION: "17"
+  JAVA_DISTRIBUTION: "temurin"
+
+jobs:
+  build:
+    name: 🔨 Build & Verify
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        # Test trên nhiều phiên bản Java nếu cần
+        java: [ "17" ]
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: ☕ Setup Java ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+
+      - name: 🗃️ Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: 🛠️ Grant execute permission
+        run: chmod +x gradlew
+
+      - name: 🏗️ Build shadowJar
+        run: ./gradlew shadowJar --no-daemon --stacktrace
+
+      - name: 📤 Upload artifacts (chỉ giữ 7 ngày)
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-jars-pr-${{ github.run_number }}
+          path: |
+            assembly/build/libs/*.jar
+            bukkit/build/libs/*.jar
+            bungee/build/libs/*.jar
+            velocity/build/libs/*.jar
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: 📋 In thông tin build
+        run: |
+          echo "✅ Build thành công!"
+          echo "📌 Commit : ${{ github.sha }}"
+          echo "🌿 Branch : ${{ github.ref_name }}"
+          find . -name "*.jar" -not -path "*/\.*" | sort

@@ -1,0 +1,55 @@
+name: ChannyAnhWEB
+version: '${version}'
+main: com.channyanh.channyanhweb.bukkit.ChannyAnhWEBBukkit
+api-version: '1.20'
+folia-supported: true
+authors: [ ChannyAnh ]
+description: ChannyAnhWEB - Web integration plugin for ChannyAnh server
+depend: [ Vault ]
+softdepend: [
+  # Chat plugins
+  Herochat, Legendchat, LunaChat, TownyChat, UltimateChat, VentureChat, EpicCore,
+  # Vanish plugins
+  Essentials, PhantomAdmin, SuperVanish, VanishNoPacket, PremiumVanish,
+  # Permissions plugins
+  LuckPerms,
+  # Auth plugins (nLogin, AuthMe, etc.)
+  nLogin, AuthMe,
+  # Misc. plugins
+  ViaVersion, SkinsRestorer, Multiverse-Core, PlaceholderAPI, mcMMO, dynmap, Skript,
+  # Ban plugins
+  LiteBans, LibertyBans, AdvancedBan
+]
+commands:
+  account-link:
+    permission: channyanhweb.link.use
+    description: Link player to an account in web
+    aliases:
+      - link-account
+      - link
+      - accountlink
+      - websitelink
+      - verify
+  ww:
+    permission: channyanhweb.ww.use
+    aliases:
+      - webwhois
+      - mwhois
+    description: Run a web whois against a player username.
+  channyanhweb:
+    permission: channyanhweb.admin
+    description: ChannyAnhWEB admin commands
+    aliases:
+      - caw
+      - mtx
+
+permissions:
+    channyanhweb.ww.use:
+        description: Allows player to run /ww command
+        default: op
+    channyanhweb.link.use:
+        description: Allows player to run /account-link command
+        default: true
+    channyanhweb.admin:
+        description: Player with this permission will be consider admin and can run ChannyAnhWEB admin commands
+        default: op

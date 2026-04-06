@@ -1,0 +1,44 @@
+#     ██████╗██╗  ██╗ █████╗ ███╗   ██╗██╗   ██╗ █████╗ ███╗   ██╗██╗  ██╗
+#    ██╔════╝██║  ██║██╔══██╗████╗  ██║╚██╗ ██╔╝██╔══██╗████╗  ██║██║  ██║
+#    ██║     ███████║███████║██╔██╗ ██║ ╚████╔╝ ███████║██╔██╗ ██║███████║
+#    ██║     ██╔══██║██╔══██║██║╚██╗██║  ╚██╔╝  ██╔══██║██║╚██╗██║██╔══██║
+#    ╚██████╗██║  ██║██║  ██║██║ ╚████║   ██║   ██║  ██║██║ ╚████║██║  ██║
+#     ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝
+#                          ChannyAnhWEB Plugin (BungeeCord)
+#                   Support: https://discord.gg/BaAwSEEhF2
+
+# This will enable or disable the ChannyAnhWEB Plugin
+enabled: true
+# The website address that will be linked. (Example: https://ChannyAnhWEB.live)
+api-host:
+# This is found on your website.  In Admin Section > Settings > Plugin
+api-key:
+# This is also found on your website.  In Admin Section > Settings > Plugin
+api-secret:
+# This is the id of the server on your website.  This has to be a numeric value. Can be found in Admin Section > Servers
+server-id:
+# Your webquery ip address.  Most of the time this can be left at 0.0.0.0
+webquery-host: 0.0.0.0
+# The port that you opened so plugin and website can communicate. Make sure this port is not already take and can be open.
+webquery-port: 25569
+# Webquery whitelisted IPs. This is an array of IPs that are allowed to connect to the webquery port.  Leave empty to allow all IPs.
+webquery-whitelisted-ips:
+# This enables the sending of console logs to web.
+enable-consolelog: true
+# Sends server intel reports like cpu usage, memory etc. to website.
+report-server-intel: true
+# Message format that will be sent when sending message from website to game
+web-message-format: '&b[WEB]&r {USERNAME}: {MESSAGE}&r'
+# If enabled the plugin will send more log data in console for better debugging.
+debug-mode: false
+# If enabled only whitelisted commands (whitelisted-commands-from-web) can be sent from web. other custom command will be discarded.
+allow-only-whitelisted-commands-from-web: false
+whitelisted-commands-from-web:
+  - alert
+  - alertraw
+  - bungee
+  - glist
+# If enabled this will let ChannyAnhWEB hook into skinsrestorer plugin if available.
+enable-skinsrestorer-hook: true
+# If enabled this will let ChannyAnhWEB hook into your ban plugin and sync bans to website.
+enable-banwarden: true

@@ -1,0 +1,16 @@
+dependencies {
+    implementation project(":common")
+    implementation "org.bstats:bstats-bungeecord:3.0.2"
+    compileOnly "io.github.waterfallmc:waterfall-api:1.20-R0.1-SNAPSHOT"
+}
+
+processResources {
+    def props = [version: version]
+    inputs.properties props
+    filteringCharset 'UTF-8'
+    filesMatching('bungee.yml') {
+        expand props
+    }
+}
+
+// shadowJar configuration inherits from root
