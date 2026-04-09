@@ -1,39 +1,35 @@
 # ============================================================
-#  auto-update-build.yml  (v3 — Fixed 403 Push Permission)
-#  Chạy hàng ngày lúc 04:00 giờ Việt Nam (UTC+7 → 21:00 UTC)
-#  Luồng: Keep-alive → Cập nhật thư viện → Build → Release
+#  auto-update-build.yml  (v5 — Fixed Naming + Release)
+#  Tên file: ChannyAnhWEB_{platform}_{version}-Beta.jar
+#  Version:  tự tăng mỗi build (1.0.1, 1.0.2, ...)
 # ============================================================
 
 name: 🔄 Auto Update & Build
 
 on:
   schedule:
-    - cron: "0 21 * * *"
+    - cron: "0 21 * * *"   # 04:00 sáng giờ VN
 
   workflow_dispatch:
     inputs:
       force_release:
-        description: "Tạo release dù không có thay đổi deps?"
+        description: "Tạo release dù không có thay đổi?"
         required: false
         default: "false"
         type: choice
-        options:
-          - "true"
-          - "false"
+        options: ["true", "false"]
       skip_update:
-        description: "Bỏ qua bước update deps, chỉ build?"
+        description: "Bỏ qua update deps, chỉ build?"
         required: false
         default: "false"
         type: choice
-        options:
-          - "true"
-          - "false"
+        options: ["true", "false"]
 
 env:
   JAVA_VERSION: "17"
   JAVA_DISTRIBUTION: "temurin"
+  FILE_PREFIX: "ChannyAnhWEB"
 
-# ── FIX 403: Cấp quyền write mặc định cho toàn bộ workflow ──
 permissions:
   contents: write
   actions: write
@@ -46,71 +42,91 @@ jobs:
     name: 💓 Keep Alive
     runs-on: ubuntu-latest
     steps:
-      - name: 🔄 Re-enable workflow nếu bị disable
-        uses: liskin/gh-workflow-keepalive@v1
+      - uses: liskin/gh-workflow-keepalive@v1
         with:
           workflow: auto-update-build.yml
         continue-on-error: true
 
   # ─────────────────────────────────────────
-  # 1. Kiểm tra & cập nhật dependency
+  # 1. Version bump + update dependency
   # ─────────────────────────────────────────
   update-dependencies:
-    name: 📦 Update Dependencies
+    name: 📦 Update & Version Bump
     runs-on: ubuntu-latest
     needs: keep-alive
     outputs:
-      has_changes: ${{ steps.check_changes.outputs.has_changes }}
-      new_version: ${{ steps.bump_version.outputs.new_version }}
+      build_version: ${{ steps.calc_version.outputs.build_version }}
+      release_tag:   ${{ steps.calc_version.outputs.release_tag }}
 
     steps:
-      - name: ⬇️ Checkout source
+      - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-          persist-credentials: true   # ── FIX 403
+          persist-credentials: true
 
-      - name: ☕ Setup Java ${{ env.JAVA_VERSION }}
+      # ── Version tự tăng, dùng run_number để đảm bảo tag KHÔNG trùng ──
+      - name: 🔢 Tính build version
+        id: calc_version
+        run: |
+          if [ -f version.txt ]; then
+            CURRENT=$(cat version.txt | tr -d '[:space:]')
+          else
+            CURRENT="1.0.0"
+          fi
+
+          echo "📌 Version hiện tại: $CURRENT"
+
+          IFS='.' read -ra P <<< "$CURRENT"
+          MAJOR="${P[0]:-1}"
+          MINOR="${P[1]:-0}"
+          PATCH="${P[2]:-0}"
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+
+          echo "$NEW_VERSION" > version.txt
+          echo "🆕 Version mới: $NEW_VERSION"
+
+          # Dùng run_number để tag KHÔNG BAO GIỜ bị trùng
+          RELEASE_TAG="v${NEW_VERSION}-beta.r${{ github.run_number }}"
+
+          echo "build_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "release_tag=$RELEASE_TAG"   >> $GITHUB_OUTPUT
+
+      - name: ☕ Setup Java
         uses: actions/setup-java@v4
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: ${{ env.JAVA_DISTRIBUTION }}
 
-      - name: 🗃️ Cache Gradle packages
+      - name: 🗃️ Cache Gradle
         uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+          restore-keys: ${{ runner.os }}-gradle-
 
-      - name: 🔍 Đảm bảo Gradle Versions Plugin có trong build.gradle
+      - name: 🔍 Đảm bảo Gradle Versions Plugin
         if: github.event.inputs.skip_update != 'true'
         run: |
-          if ! grep -q "ben-manes.versions" build.gradle 2>/dev/null; then
-            echo "⚠️  Chưa có Gradle Versions Plugin — thêm tự động..."
-            sed -i '/^plugins\s*{/a\    id("com.github.ben-manes.versions") version "0.51.0"' build.gradle
-            echo "PLUGIN_ADDED=true" >> $GITHUB_ENV
-          else
-            echo "✅ Gradle Versions Plugin đã tồn tại"
-            echo "PLUGIN_ADDED=false" >> $GITHUB_ENV
+          if ! grep -q "ben-manes.versions" build.gradle 2>/dev/null && \
+             ! grep -q "ben-manes.versions" build.gradle.kts 2>/dev/null; then
+            if [ -f build.gradle ]; then
+              sed -i '/^plugins\s*{/a\    id("com.github.ben-manes.versions") version "0.51.0"' build.gradle
+              echo "✅ Đã thêm Gradle Versions Plugin vào build.gradle"
+            fi
           fi
 
-      - name: 📋 Chạy báo cáo dependency lỗi thời
+      - name: 📋 Báo cáo dependency lỗi thời
         if: github.event.inputs.skip_update != 'true'
         run: |
-          ./gradlew dependencyUpdates \
-            -Drevision=release \
-            --no-daemon \
+          ./gradlew dependencyUpdates -Drevision=release --no-daemon \
             2>&1 | tee dependency-report.txt || true
-          echo "--- Tóm tắt ---"
-          grep -E "\->" dependency-report.txt | head -30 || echo "(Không có deps cần update)"
 
-      - name: 🔄 Tự động cập nhật versions trong gradle.properties
-        id: auto_update
+      - name: 🔄 Cập nhật versions trong gradle.properties
         if: github.event.inputs.skip_update != 'true'
         run: |
           python3 << 'PYEOF'
@@ -118,129 +134,71 @@ jobs:
 
           report_file = "dependency-report.txt"
           props_file  = "gradle.properties"
-          updated_count = 0
 
           if not os.path.exists(report_file):
-              print("⚠️  Không tìm thấy dependency-report.txt — bỏ qua.")
+              print("⚠️  Không tìm thấy dependency-report.txt, bỏ qua.")
               sys.exit(0)
 
           with open(report_file, encoding="utf-8", errors="ignore") as f:
               content = f.read()
 
           pattern = re.compile(
-              r"[\w.\-]+:[\w.\-]+\s+\["
-              r"([\d][\w.\-]*)"
-              r"\s+->\s+"
-              r"([\d][\w.\-]*)"
-              r"\]"
+              r"[\w.\-]+:[\w.\-]+\s+\[([\d][\w.\-]*)\s+->\s+([\d][\w.\-]*)\]"
           )
-
-          updates = {}
-          for cur, new in pattern.findall(content):
-              if cur != new:
-                  updates[cur] = new
-                  print(f"  📌 Phát hiện: {cur} → {new}")
+          updates = {cur: new for cur, new in pattern.findall(content) if cur != new}
 
           if not updates:
-              print("✅ Không có dependency nào cần cập nhật.")
+              print("✅ Không có dependency cần cập nhật.")
               sys.exit(0)
 
-          print(f"\n🔄 Tổng cộng {len(updates)} version cần đổi\n")
+          print(f"🔍 Tìm thấy {len(updates)} bản cập nhật:")
+          for c, n in updates.items():
+              print(f"  📌 {c} → {n}")
 
           if not os.path.exists(props_file):
-              print(f"⚠️  Không tìm thấy {props_file} — bỏ qua.")
+              print(f"⚠️  Không tìm thấy {props_file}, bỏ qua.")
               sys.exit(0)
 
           with open(props_file, encoding="utf-8") as f:
               lines = f.readlines()
 
-          new_lines = []
+          new_lines, count = [], 0
           for line in lines:
-              new_line = line
+              nl = line
               if re.match(r'^\s*[^#].*=', line):
-                  for cur_ver, latest_ver in updates.items():
+                  for c, n in updates.items():
                       replaced = re.sub(
-                          r'(=\s*)' + re.escape(cur_ver) + r'(\s*(?:#.*)?)$',
-                          rf'\g<1>{latest_ver}\2',
-                          new_line,
-                          flags=re.MULTILINE
+                          r'(=\s*)' + re.escape(c) + r'(\s*(?:#.*)?)$',
+                          rf'\g<1>{n}\2', nl, flags=re.MULTILINE
                       )
-                      if replaced != new_line:
-                          print(f"  ✏️  Đã sửa: {new_line.strip()}  →  {replaced.strip()}")
-                          new_line = replaced
-                          updated_count += 1
-              new_lines.append(new_line)
+                      if replaced != nl:
+                          nl, count = replaced, count + 1
+              new_lines.append(nl)
 
-          if updated_count > 0:
+          if count:
               with open(props_file, "w", encoding="utf-8") as f:
                   f.writelines(new_lines)
-              print(f"\n✅ Đã cập nhật {updated_count} dòng trong {props_file}")
+              print(f"✅ Đã cập nhật {count} dòng trong gradle.properties")
           else:
-              print(f"\nℹ️  Không có dòng nào trong {props_file} cần thay đổi.")
+              print("ℹ️  Không có dòng nào trong gradle.properties khớp để cập nhật.")
           PYEOF
 
-      - name: 🔢 Tăng version patch trong gradle.properties
-        id: bump_version
-        run: |
-          PROPS="gradle.properties"
-          CURRENT=""
-          for KEY in "version" "pluginVersion" "mod_version" "plugin_version"; do
-            CURRENT=$(grep -E "^${KEY}\s*=" "$PROPS" 2>/dev/null \
-                      | head -1 | sed 's/.*=\s*//' | tr -d '[:space:]')
-            [ -n "$CURRENT" ] && { echo "🔑 Key tìm thấy: $KEY=$CURRENT"; break; }
-          done
-          [ -z "$CURRENT" ] && CURRENT="1.0.0"
-
-          BASE_VERSION=$(echo "$CURRENT" | sed 's/-auto\.[0-9]*$//')
-          echo "📌 Version hiện tại: $BASE_VERSION"
-
-          IFS='.' read -ra P <<< "$BASE_VERSION"
-          MAJOR="${P[0]:-1}"
-          MINOR="${P[1]:-0}"
-          PATCH=$(echo "${P[2]:-0}" | grep -o '^[0-9]*')
-          PATCH=$((PATCH + 1))
-          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}-auto.$(date +%Y%m%d)"
-          echo "🆕 Version mới: $NEW_VERSION"
-
-          for KEY in "version" "pluginVersion" "mod_version" "plugin_version"; do
-            if grep -qE "^${KEY}\s*=" "$PROPS" 2>/dev/null; then
-              sed -i "s|^\(${KEY}\s*=\s*\).*|\1${NEW_VERSION}|" "$PROPS"
-              echo "✅ Đã ghi $KEY=$NEW_VERSION vào $PROPS"
-              break
-            fi
-          done
-
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-
-      - name: 🔎 Kiểm tra có thay đổi không
-        id: check_changes
-        run: |
-          if git diff --quiet; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "ℹ️  Không có thay đổi nào."
-          else
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "✅ Phát hiện thay đổi:"
-            git diff --stat
-          fi
-
-      - name: 💾 Commit cập nhật dependency
-        if: steps.check_changes.outputs.has_changes == 'true'
+      - name: 💾 Commit & Push (version.txt + deps)
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "chore(deps): auto-update dependencies $(date +'%Y-%m-%d')
+          git diff --cached --quiet \
+            && echo "ℹ️  Không có gì để commit." \
+            && exit 0
+          git commit -m "chore: bump version → ${{ steps.calc_version.outputs.build_version }} [$(date +'%Y-%m-%d')]
 
           🤖 Tự động bởi GitHub Actions
-          📅 UTC  : $(date +'%Y-%m-%d %H:%M:%S UTC')
-          🕓 VN   : $(TZ=Asia/Ho_Chi_Minh date +'%Y-%m-%d %H:%M:%S')
-          🆕 Ver  : ${{ steps.bump_version.outputs.new_version }}"
-          # ── FIX 403: Push với token xác thực rõ ràng ─────────
+          🕓 VN: $(TZ=Asia/Ho_Chi_Minh date +'%Y-%m-%d %H:%M:%S')"
           git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:main
 
   # ─────────────────────────────────────────
-  # 2. Build shadowJar
+  # 2. Build & đặt tên file
   # ─────────────────────────────────────────
   build:
     name: 🔨 Build Plugin
@@ -248,52 +206,89 @@ jobs:
     needs: update-dependencies
 
     steps:
-      - name: ⬇️ Checkout (sau khi đã cập nhật deps)
+      - name: ⬇️ Checkout (lấy commit mới nhất sau khi version bump)
         uses: actions/checkout@v4
         with:
           ref: main
 
-      - name: ☕ Setup Java ${{ env.JAVA_VERSION }}
+      - name: ☕ Setup Java
         uses: actions/setup-java@v4
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: ${{ env.JAVA_DISTRIBUTION }}
 
-      - name: 🗃️ Cache Gradle packages
+      - name: 🗃️ Cache Gradle
         uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+          restore-keys: ${{ runner.os }}-gradle-
 
-      - name: 🛠️ Cấp quyền cho gradlew
+      - name: 🛠️ Cấp quyền gradlew
         run: chmod +x gradlew
 
       - name: 🏗️ Build shadowJar
-        run: |
-          ./gradlew shadowJar \
-            --no-daemon \
-            --stacktrace
+        run: ./gradlew shadowJar --no-daemon --stacktrace
 
-      - name: 📂 Liệt kê JAR artifacts được tạo
+      # ── Debug: xem toàn bộ JAR được tạo ra ──────────────
+      - name: 🔍 Debug — Tìm tất cả JAR sau build
         run: |
-          echo "=== JAR files ==="
-          find . -name "*.jar" -not -path "*/\.*" | sort
+          echo "=== Toàn bộ file .jar trong project ==="
+          find . -name "*.jar" -not -path "*/.gradle/*" -not -path "*/wrapper/*" \
+            | sort
+
+      # ── Đặt lại tên file theo chuẩn ─────────────────────
+      # ChannyAnhWEB_{platform}_{version}-Beta.jar
+      - name: 📛 Đổi tên JAR
+        env:
+          VER: ${{ needs.update-dependencies.outputs.build_version }}
+          PFX: ${{ env.FILE_PREFIX }}
+        run: |
+          mkdir -p renamed-jars
+
+          # Hàm copy + đổi tên
+          # Tìm JAR *không phải* plain JAR (ưu tiên *-all.jar hoặc *-shadow.jar)
+          rename_jar() {
+            local PLATFORM=$1
+            local SRC_DIR=$2
+
+            # Ưu tiên shadow/all jar, fallback bất kỳ jar nào trong thư mục
+            local JAR
+            JAR=$(find "$SRC_DIR" -name "*-all.jar" -o -name "*-shadow.jar" 2>/dev/null | head -1)
+            [ -z "$JAR" ] && JAR=$(find "$SRC_DIR" -name "*.jar" 2>/dev/null | head -1)
+
+            if [ -n "$JAR" ]; then
+              local DEST="renamed-jars/${PFX}_${PLATFORM}_${VER}-Beta.jar"
+              cp "$JAR" "$DEST"
+              echo "✅ ${PLATFORM} → $(basename "$DEST")  (nguồn: $JAR)"
+            else
+              echo "⚠️  Không tìm thấy JAR cho ${PLATFORM} trong ${SRC_DIR}"
+            fi
+          }
+
+          # Điều chỉnh đường dẫn nếu project của bạn khác cấu trúc này
+          rename_jar "bukkit"   "bukkit/build/libs"
+          rename_jar "bungee"   "bungee/build/libs"
+          rename_jar "velocity" "velocity/build/libs"
+          rename_jar "assembly" "assembly/build/libs"
+
+          echo ""
+          echo "=== Danh sách JAR đã đặt tên ==="
+          ls -lh renamed-jars/
+
+          # Fail rõ ràng nếu không có file nào
+          [ "$(ls -A renamed-jars/)" ] \
+            || { echo "❌ Không có JAR nào được tạo ra!"; exit 1; }
 
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: plugin-jars-${{ github.run_number }}
-          path: |
-            assembly/build/libs/*.jar
-            bukkit/build/libs/*.jar
-            bungee/build/libs/*.jar
-            velocity/build/libs/*.jar
+          path: renamed-jars/*.jar
           retention-days: 30
-          if-no-files-found: warn
+          if-no-files-found: error   # fail ngay nếu không có file
 
   # ─────────────────────────────────────────
   # 3. Tạo GitHub Release
@@ -302,98 +297,119 @@ jobs:
     name: 🚀 Create Release
     runs-on: ubuntu-latest
     needs: [update-dependencies, build]
-    if: >
-      needs.update-dependencies.outputs.has_changes == 'true' ||
-      github.event.inputs.force_release == 'true'
+    # Chạy khi build thành công — luôn release với schedule/manual
+    if: needs.build.result == 'success'
 
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
           ref: main
+          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: true
 
-      - name: ⬇️ Download artifacts từ build job
+      - name: ⬇️ Download JARs
         uses: actions/download-artifact@v4
         with:
           name: plugin-jars-${{ github.run_number }}
           path: ./release-artifacts
 
-      - name: 📂 Liệt kê artifacts
-        run: ls -lh ./release-artifacts/ 2>/dev/null || echo "Không có artifact"
+      - name: 📂 Kiểm tra file release
+        run: |
+          echo "=== Files chuẩn bị release ==="
+          ls -lh ./release-artifacts/
+          [ "$(ls -A ./release-artifacts/)" ] \
+            || { echo "❌ Không có file để release!"; exit 1; }
 
-      - name: 🏷️ Tạo tag version mới
+      - name: 🏷️ Tạo Git tag
         id: create_tag
         run: |
-          DATE_TAG="auto-$(TZ=Asia/Ho_Chi_Minh date +'%Y%m%d-%H%M')"
-          echo "tag=$DATE_TAG" >> $GITHUB_OUTPUT
+          TAG="${{ needs.update-dependencies.outputs.release_tag }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$DATE_TAG" -m "Auto build: $DATE_TAG"
-          # ── FIX 403: Push tag với token rõ ràng ──────────────
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git "$DATE_TAG"
 
-      - name: 📝 Tạo changelog tự động
-        id: changelog
+          # Xóa tag cũ nếu tồn tại (tránh lỗi "tag already exists")
+          git tag -d "$TAG" 2>/dev/null || true
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git ":refs/tags/$TAG" 2>/dev/null || true
+
+          git tag -a "$TAG" -m "Release $TAG"
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git "$TAG"
+          echo "✅ Tag tạo xong: $TAG"
+
+      - name: 📝 Tạo release notes
         run: |
-          LAST_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+          VER="${{ needs.update-dependencies.outputs.build_version }}"
+          TAG="${{ steps.create_tag.outputs.tag }}"
+          PFX="${{ env.FILE_PREFIX }}"
+
+          LAST_TAG=$(git tag --sort=-creatordate | grep -v "^${TAG}$" | head -1 || echo "")
           if [ -n "$LAST_TAG" ]; then
-            LOG=$(git log "$LAST_TAG"..HEAD --oneline --no-merges | head -20 || echo "Không có commit mới")
+            LOG=$(git log "${LAST_TAG}..HEAD" --oneline --no-merges | head -20 || echo "—")
           else
-            LOG=$(git log --oneline --no-merges | head -10 || echo "")
+            LOG=$(git log --oneline --no-merges | head -10 || echo "—")
           fi
 
           cat << EOF > release-notes.md
-          ## 🤖 Auto Build — $(TZ=Asia/Ho_Chi_Minh date +'%d/%m/%Y %H:%M') (Giờ VN)
+          ## 🎮 ${PFX} Plugin — v${VER} Beta
 
-          > Build tự động hàng ngày lúc **04:00 sáng giờ Việt Nam**.
+          > 🕓 Build lúc **$(TZ=Asia/Ho_Chi_Minh date +'%H:%M %d/%m/%Y')** (Giờ VN)
+          > 🤖 Tự động build hàng ngày lúc **04:00 sáng**
 
-          ### 📦 Version
-          \`${{ needs.update-dependencies.outputs.new_version }}\`
+          ---
 
-          ### 📋 Commits kể từ lần build trước
+          ### 📥 Tải về
+
+          | Platform | File |
+          |----------|------|
+          | 🟠 Bukkit / Spigot / Paper | \`${PFX}_bukkit_${VER}-Beta.jar\` |
+          | 🔵 BungeeCord              | \`${PFX}_bungee_${VER}-Beta.jar\` |
+          | 🟣 Velocity                | \`${PFX}_velocity_${VER}-Beta.jar\` |
+          | 📦 Assembly (all-in-one)   | \`${PFX}_assembly_${VER}-Beta.jar\` |
+
+          ### 📋 Commits trong bản này
           \`\`\`
-          $LOG
+          ${LOG}
           \`\`\`
 
-          ### 📥 Cách sử dụng
-          Tải file JAR phù hợp và đặt vào thư mục \`plugins/\` của server:
-          - **Bukkit/Spigot/Paper** → \`MineTraxPlugin-bukkit-*.jar\`
-          - **BungeeCord**          → \`MineTraxPlugin-bungee-*.jar\`
-          - **Velocity**            → \`MineTraxPlugin-velocity-*.jar\`
+          ### 🚀 Cài đặt
+          Đặt file JAR vào thư mục \`plugins/\` của server rồi restart.
           EOF
 
-      - name: 🚀 Tạo GitHub Release
+      - name: 🚀 Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.create_tag.outputs.tag }}
-          name: "🔄 Auto Build — ${{ steps.create_tag.outputs.tag }}"
-          body_path: release-notes.md
-          draft: false
+          tag_name:   ${{ steps.create_tag.outputs.tag }}
+          name:       "🎮 ${{ env.FILE_PREFIX }} v${{ needs.update-dependencies.outputs.build_version }} Beta"
+          body_path:  release-notes.md
+          draft:      false
           prerelease: true
-          files: ./release-artifacts/**/*.jar
+          files:      ./release-artifacts/*.jar
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ─────────────────────────────────────────
-  # 4. Thông báo kết quả
+  # 4. Tóm tắt kết quả
   # ─────────────────────────────────────────
   notify:
-    name: 📣 Notify Result
+    name: 📣 Summary
     runs-on: ubuntu-latest
     needs: [update-dependencies, build, release]
     if: always()
 
     steps:
-      - name: ✅ Tóm tắt kết quả workflow
+      - name: ✅ In kết quả
         run: |
-          echo "╔══════════════════════════════════════╗"
-          echo "║     KẾT QUẢ AUTO BUILD & UPDATE      ║"
-          echo "╠══════════════════════════════════════╣"
+          echo "╔══════════════════════════════════════════════╗"
+          echo "║         KẾT QUẢ AUTO BUILD & RELEASE         ║"
+          echo "╠══════════════════════════════════════════════╣"
           echo "║ 📦 Update deps : ${{ needs.update-dependencies.result }}"
           echo "║ 🔨 Build       : ${{ needs.build.result }}"
           echo "║ 🚀 Release     : ${{ needs.release.result }}"
-          echo "║ 🆕 Version     : ${{ needs.update-dependencies.outputs.new_version }}"
+          echo "║ 🆕 Version     : ${{ needs.update-dependencies.outputs.build_version }}"
+          echo "║ 🏷️  Tag         : ${{ needs.update-dependencies.outputs.release_tag }}"
           echo "║ 🕓 Giờ VN      : $(TZ=Asia/Ho_Chi_Minh date +'%Y-%m-%d %H:%M:%S')"
-          echo "╚══════════════════════════════════════╝"
+          echo "╚══════════════════════════════════════════════╝"
