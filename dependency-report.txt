@@ -1,1 +1,1 @@
-/home/runner/work/_temp/99a3ed75-799e-4f88-9980-89d46020c761.sh: line 1: ./gradlew: Permission denied
+/home/runner/work/_temp/866079ae-fc50-4613-a0c6-487565f0cfdd.sh: line 1: ./gradlew: Permission denied
